@@ -8,6 +8,11 @@ use tokio::time::{interval, Duration};
 use dotenv::dotenv;
 use std::env;
 
+// Fetch the daily LeetCode question
+// Returns the URL of the daily question if found
+// Returns None if no daily question is found
+// Returns an error if an HTTP request error occurs
+// The function is asynchronous because it makes an HTTP request
 async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let query = r#"
     {
@@ -41,10 +46,13 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
     Ok(None)
 }
 
+
+// Send the daily LeetCode challenge to the chat
 async fn send_daily_challenge(bot: Bot, chat_id: ChatId, client: Client) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(url) = fetch_leetcode_daily_question(&client).await? {
         bot.send_message(chat_id, format!("Today's LeetCode Challenge: {}", url))
             .parse_mode(ParseMode::Html)
+            .disable_web_page_preview(true)
             .send()
             .await?;
     } else {
