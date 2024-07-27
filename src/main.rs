@@ -12,6 +12,8 @@ use tokio::sync::Mutex;
 use tokio::time::{interval_at, sleep, Duration, Instant};
 use dotenv::dotenv;
 use std::env;
+use tokio::fs as async_fs;
+use tokio::io::AsyncWriteExt;
 
 // Fetch the daily LeetCode question
 async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
@@ -77,7 +79,7 @@ async fn fetch_leetcode_question(client: &Client, difficulty: &str) -> Result<Op
         .json::<HashMap<String, Value>>()
         .await?;
 
-    println!("Response from LeetCode for {} question arrived.", difficulty);
+    println!("Response from LeetCode for {} question arrived.\n {:#?}", difficulty,response);
     if let Some(data) = response.get("data") {
         if let Some(problemsetQuestionList) = data.get("problemsetQuestionList") {
             if let Some(questions) = problemsetQuestionList.get("questions") {
@@ -162,9 +164,23 @@ async fn load_chat_ids(file_path: &str) -> HashSet<ChatId> {
 async fn save_chat_ids(file_path: &str, chat_ids: &HashSet<ChatId>) {
     println!("Saving chat IDs to file...");
     if let Ok(data) = serde_json::to_string(chat_ids) {
-        let _ = fs::write(file_path, data);
+        // Use tokio::fs::File for async file handling
+        if let Ok(mut file) = async_fs::File::create(file_path).await {
+            if file.write_all(data.as_bytes()).await.is_ok() {
+                if file.sync_all().await.is_ok() {
+                    println!("Chat IDs saved.");
+                } else {
+                    println!("Failed to sync data to disk.");
+                }
+            } else {
+                println!("Failed to write data to file.");
+            }
+        } else {
+            println!("Failed to create file.");
+        }
+    } else {
+        println!("Failed to serialize chat IDs.");
     }
-    println!("Chat IDs saved.");
 }
 
 #[tokio::main]
