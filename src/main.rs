@@ -156,10 +156,10 @@ async fn main() {
     if let Err(err) = send_leetcode_challenge(bot.clone(), chat_id, client.clone(), "daily").await {
         eprintln!("Error sending daily challenge: {:?}", err);
     }
-    if let Err(err) = send_leetcode_challenge(bot.clone(), chat_id, client.clone(), "Easy").await {
+    if let Err(err) = send_leetcode_challenge(bot.clone(), chat_id, client.clone(), "EASY").await {
         eprintln!("Error sending easy challenge: {:?}", err);
     }
-    if let Err(err) = send_leetcode_challenge(bot.clone(), chat_id, client.clone(), "Hard").await {
+    if let Err(err) = send_leetcode_challenge(bot.clone(), chat_id, client.clone(), "HARD").await {
         eprintln!("Error sending hard challenge: {:?}", err);
     }
 
