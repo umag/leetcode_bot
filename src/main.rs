@@ -22,7 +22,7 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
         "operationName": "questionOfToday"
     }
     "#;
-
+    println!("Sending request to leetcode...");
     let response = client
         .post("https://leetcode.com/graphql/")
         .header("Content-type", "application/json")
@@ -34,10 +34,12 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
         .json::<HashMap<String, Value>>()
         .await?;
 
+    println!("Responce from leetcode arrived.");
     if let Some(data) = response.get("data") {
         if let Some(active_daily_coding_challenge_question) = data.get("activeDailyCodingChallengeQuestion") {
             if let Some(link) = active_daily_coding_challenge_question.get("link") {
                 if let Some(link_str) = link.as_str() {
+                    println!("Daily question found.");
                     return Ok(Some(format!("https://leetcode.com{}", link_str)));
                 }
             }
@@ -49,6 +51,7 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
 
 // Send the daily LeetCode challenge to the chat
 async fn send_daily_challenge(bot: Bot, chat_id: ChatId, client: Client) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Sending daily challenge...");
     if let Some(url) = fetch_leetcode_daily_question(&client).await? {
         let message = bot.send_message(chat_id, format!("Today's LeetCode Challenge: {}", url))
             .parse_mode(ParseMode::Html)
@@ -58,10 +61,12 @@ async fn send_daily_challenge(bot: Bot, chat_id: ChatId, client: Client) -> Resu
         bot.pin_chat_message(chat_id, message.id)
         .disable_notification(true)
         .send().await?;
+    println!("Daily challenge sent.");
     } else {
         bot.send_message(chat_id, "No daily question found.")
             .send()
             .await?;
+        println!("No daily question found.");
     }
     Ok(())
 }
@@ -77,6 +82,7 @@ fn duration_until_next_trigger(trigger_time: NaiveTime) -> Duration {
     };
 
     let duration = next_trigger - now;
+    println!("Duration until next trigger: {}", duration);
     Duration::from_secs(duration.num_seconds() as u64)
 }
 
@@ -84,6 +90,7 @@ fn duration_until_next_trigger(trigger_time: NaiveTime) -> Duration {
 async fn main() {
     // Load the Telegram bot token and chat ID from environment variables
     dotenv().ok();
+    println!("Loading environment variables...");
     let bot_token = env::var("TELOXIDE_TOKEN").expect("TELOXIDE_TOKEN not set");
     let chat_id: i64 = env::var("CHAT_ID")
         .expect("CHAT_ID not set")
@@ -94,7 +101,9 @@ async fn main() {
     let trigger_time_str = env::var("TRIGGER_TIME").expect("TRIGGER_TIME not set");
     let trigger_time = NaiveTime::parse_from_str(&trigger_time_str, "%H:%M:%S")
         .expect("TRIGGER_TIME should be in the format HH:MM:SS");
-
+    println!("Trigger time: {}", trigger_time);
+    println!("Variables loaded.");
+    println!("Starting bot...");
     // Initialize the bot and HTTP client
     let bot = Bot::new(bot_token);
     let client = Client::new();
@@ -107,10 +116,13 @@ async fn main() {
     // Spawn a task to send the daily challenge
     let bot_clone = bot.clone();
     let client_clone = client.clone();
+    println!("Spawning task to send daily challenge...");
     tokio::spawn(async move {
         let mut interval = interval_at(start, Duration::from_secs(60 * 60 * 24));
         loop {
+            println!("Waiting for next trigger...");
             interval.tick().await;
+            println!("Triggered.");
             if let Err(err) = send_daily_challenge(bot_clone.clone(), chat_id, client_clone.clone()).await {
                 eprintln!("Error sending daily challenge: {:?}", err);
             }

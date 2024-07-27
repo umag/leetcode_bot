@@ -1,0 +1,6 @@
+version: '3'
+services:
+  leetcode_bot:
+    image: docker.io/umagistr/leetcode_bot
+    env_file:
+      - .env
