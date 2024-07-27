@@ -51,64 +51,15 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
     Ok(None)
 }
 
-// Fetch a LeetCode question based on difficulty
-async fn fetch_leetcode_question(client: &Client, difficulty: &str) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let query = format!(r#"
-    {{
-        "query": "query problemsetQuestionList($categorySlug: String, $filters: QuestionListFilterInput) {{ 
-            problemsetQuestionList(categorySlug: $categorySlug, filters: $filters) {{ questions {{ titleSlug }} }} 
-        }}",
-        "variables": {{
-            "categorySlug": "",
-            "filters": {{
-                "difficulty": "{}"
-            }}
-        }},
-        "operationName": "problemsetQuestionList"
-    }}
-    "#, difficulty.to_uppercase());
-    println!("Sending request to LeetCode for {} question...", difficulty);
-    let response = client
-        .post("https://leetcode.com/graphql/")
-        .header("Content-type", "application/json")
-        .header("Origin", "leetcode.com")
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
-        .body(query)
-        .send()
-        .await?
-        .json::<HashMap<String, Value>>()
-        .await?;
-
-    println!("Response from LeetCode for {} question arrived.\n {:#?}", difficulty,response);
-    if let Some(data) = response.get("data") {
-        if let Some(problemsetQuestionList) = data.get("problemsetQuestionList") {
-            if let Some(questions) = problemsetQuestionList.get("questions") {
-                if let Some(first_question) = questions.as_array().and_then(|arr| arr.get(0)) {
-                    if let Some(title_slug) = first_question.get("titleSlug") {
-                        if let Some(title_slug_str) = title_slug.as_str() {
-                            println!("{} question found.", difficulty);
-                            return Ok(Some(format!("https://leetcode.com/problems/{}", title_slug_str)));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(None)
-}
 
 // Send the LeetCode challenges to all subscribed chats
 async fn send_daily_challenge(bot: Bot, chat_ids: Arc<Mutex<HashSet<ChatId>>>, client: Client) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let daily_question = fetch_leetcode_daily_question(&client).await?;
-    let easy_question = fetch_leetcode_question(&client, "EASY").await?;
-    let hard_question = fetch_leetcode_question(&client, "HARD").await?;
 
     let message_text = format!(
-        "Today's LeetCode Challenges:\n\nDaily: {}\n\nEasy: {}\n\nHard: {}",
+        "Today's LeetCode Challenge:\n\nDaily: {}",
         daily_question.unwrap_or_else(|| "Not available".to_string()),
-        easy_question.unwrap_or_else(|| "Not available".to_string()),
-        hard_question.unwrap_or_else(|| "Not available".to_string())
+
     );
     println!("Sending message to all chats...");
     let chat_ids_guard = chat_ids.lock().await;
@@ -270,9 +221,7 @@ async fn main() {
                             .await?;
                     }
                     _ => {
-                        bot.send_message(chat_id, "Unknown command. Use /start to subscribe or /stop to unsubscribe.")
-                            .send()
-                            .await?;
+                        // do nothing
                     }
                 }
                 respond(())
