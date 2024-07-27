@@ -4,3 +4,5 @@ services:
     image: docker.io/umagistr/leetcode_bot
     env_file:
       - .env
+    volumes:
+      - chatbot_data:/chatbot_data

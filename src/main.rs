@@ -3,6 +3,7 @@ use rand::Rng;
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, ParseMode};
@@ -26,7 +27,7 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
         .post("https://leetcode.com/graphql/")
         .header("Content-type", "application/json")
         .header("Origin", "leetcode.com")
-        .header("User-agent", "Mozilla/5.0")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
         .body(query)
         .send()
         .await?
@@ -69,7 +70,7 @@ async fn fetch_leetcode_question(client: &Client, difficulty: &str) -> Result<Op
         .post("https://leetcode.com/graphql/")
         .header("Content-type", "application/json")
         .header("Origin", "leetcode.com")
-        .header("User-agent", "Mozilla/5.0")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
         .body(query)
         .send()
         .await?
@@ -107,7 +108,7 @@ async fn send_daily_challenge(bot: Bot, chat_ids: Arc<Mutex<HashSet<ChatId>>>, c
         easy_question.unwrap_or_else(|| "Not available".to_string()),
         hard_question.unwrap_or_else(|| "Not available".to_string())
     );
-
+    println!("Sending message to all chats...");
     let chat_ids_guard = chat_ids.lock().await;
     for &chat_id in chat_ids_guard.iter() {
         let delay = rand::thread_rng().gen_range(0..600); // Random delay up to 10 minutes
@@ -144,6 +145,28 @@ fn duration_until_next_trigger(trigger_time: NaiveTime) -> Duration {
     Duration::from_secs(duration.num_seconds() as u64)
 }
 
+// Load chat IDs from the file
+async fn load_chat_ids(file_path: &str) -> HashSet<ChatId> {
+    println!("Loading chat IDs from file...");
+    if let Ok(data) = fs::read_to_string(file_path) {
+        println!("Chat IDs file found.");
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        println!("Chat IDs file not found, creating a new one.");
+        HashSet::new()
+    }
+
+}
+
+// Save chat IDs to the file
+async fn save_chat_ids(file_path: &str, chat_ids: &HashSet<ChatId>) {
+    println!("Saving chat IDs to file...");
+    if let Ok(data) = serde_json::to_string(chat_ids) {
+        let _ = fs::write(file_path, data);
+    }
+    println!("Chat IDs saved.");
+}
+
 #[tokio::main]
 async fn main() {
     // Load environment variables
@@ -153,13 +176,17 @@ async fn main() {
     let trigger_time_str = env::var("TRIGGER_TIME").expect("TRIGGER_TIME not set");
     let trigger_time = NaiveTime::parse_from_str(&trigger_time_str, "%H:%M:%S")
         .expect("TRIGGER_TIME should be in the format HH:MM:SS");
+    let chat_ids_file_path = env::var("CHAT_IDS_FILE_PATH").expect("CHAT_IDS_FILE_PATH not set");
 
     // Initialize the bot and HTTP client
     println!("Initializing bot and client...");
     let bot = Bot::new(bot_token);
     let client = Client::new();
-    let chat_ids = Arc::new(Mutex::new(HashSet::new()));
 
+    // Load chat IDs from the file
+    println!("Loading chat IDs from file...");
+    let chat_ids = Arc::new(Mutex::new(load_chat_ids(&chat_ids_file_path).await));
+    println!("Chat IDs loaded.");
     // Calculate the duration until the next trigger time
     let duration = duration_until_next_trigger(trigger_time);
     let start = Instant::now() + duration;
@@ -184,39 +211,62 @@ async fn main() {
     });
 
     // Handle incoming messages
-    teloxide::repl(bot.clone(), move |message: Message, bot: Bot| {
-        let chat_id = message.chat.id;
-        let text = message.text().unwrap_or_default().to_string();
+    println!("Starting message handler...");
+    let handler = Update::filter_message().branch(dptree::entry().endpoint({
         let chat_ids = Arc::clone(&chat_ids);
+        let client_clone = client.clone();
+        let bot_clone = bot.clone();
+        let chat_ids_file_path = chat_ids_file_path.clone();
+        move |message: Message, bot: Bot| {
+            let chat_id = message.chat.id;
+            let text = message.text().unwrap_or_default().to_string();
+            let chat_ids = Arc::clone(&chat_ids);
+            let client_clone = client_clone.clone();
+            let bot_clone = bot_clone.clone();
+            let chat_ids_file_path = chat_ids_file_path.clone();
+            async move {
+                match text.as_str() {
+                    "/start" => {
+                        println!("Chat {} started receiving challenges.", chat_id);
+                        {
+                            let mut chat_ids_guard = chat_ids.lock().await;
+                            chat_ids_guard.insert(chat_id);
+                            save_chat_ids(&chat_ids_file_path, &chat_ids_guard).await;
+                        }
+                        bot.send_message(chat_id, "You will start receiving daily challenges.")
+                            .send()
+                            .await?;
 
-        async move {
-            match text.as_str() {
-                "/start" => {
-                    println!("Chat {} started receiving challenges.", chat_id);
-                    {
-                        let mut chat_ids_guard = chat_ids.lock().await;
-                        chat_ids_guard.insert(chat_id);
+                        // Send the first set of challenges immediately
+                        if let Err(err) = send_daily_challenge(bot_clone, Arc::clone(&chat_ids), client_clone).await {
+                            eprintln!("Error sending initial challenges: {:?}", err);
+                        }
                     }
-                    bot.send_message(chat_id, "Welcome to the LeetCode Challenge Bot! You will receive daily challenges.")
-                        .parse_mode(ParseMode::Html)
-                        .send()
-                        .await?;
-                },
-                "/stop" => {
-                    println!("Chat {} stopped receiving challenges.", chat_id);
-                    {
-                        let mut chat_ids_guard = chat_ids.lock().await;
-                        chat_ids_guard.remove(&chat_id);
+                    "/stop" => {
+                        println!("Chat {} stopped receiving challenges.", chat_id);
+                        {
+                            let mut chat_ids_guard = chat_ids.lock().await;
+                            chat_ids_guard.remove(&chat_id);
+                            save_chat_ids(&chat_ids_file_path, &chat_ids_guard).await;
+                        }
+                        bot.send_message(chat_id, "You have stopped receiving daily challenges.")
+                            .send()
+                            .await?;
                     }
-                    bot.send_message(chat_id, "You have been unsubscribed from daily challenges.")
-                        .send()
-                        .await?;
-                },
-                _ => {}
+                    _ => {
+                        bot.send_message(chat_id, "Unknown command. Use /start to subscribe or /stop to unsubscribe.")
+                            .send()
+                            .await?;
+                    }
+                }
+                respond(())
             }
-
-            Ok(())
         }
-    })
-    .await;
+    }));
+
+    Dispatcher::builder(bot, handler)
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
 }
