@@ -1,10 +1,11 @@
+use chrono::{NaiveTime,Local};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::HashMap;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, ParseMode};
 use teloxide::Bot;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval_at, Duration, Instant};
 use dotenv::dotenv;
 use std::env;
 
@@ -50,11 +51,14 @@ async fn fetch_leetcode_daily_question(client: &Client) -> Result<Option<String>
 // Send the daily LeetCode challenge to the chat
 async fn send_daily_challenge(bot: Bot, chat_id: ChatId, client: Client) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(url) = fetch_leetcode_daily_question(&client).await? {
-        bot.send_message(chat_id, format!("Today's LeetCode Challenge: {}", url))
+        let message = bot.send_message(chat_id, format!("Today's LeetCode Challenge: {}", url))
             .parse_mode(ParseMode::Html)
             .disable_web_page_preview(true)
             .send()
             .await?;
+        bot.pin_chat_message(chat_id, message.id)
+        .disable_notification(true)
+        .send().await?;
     } else {
         bot.send_message(chat_id, "No daily question found.")
             .send()
@@ -62,6 +66,29 @@ async fn send_daily_challenge(bot: Bot, chat_id: ChatId, client: Client) -> Resu
     }
     Ok(())
 }
+
+async fn handle_start_command(bot: Bot, chat_id: ChatId) -> Result<(), Box<dyn std::error::Error>> {
+    bot.send_message(chat_id, "Welcome to the LeetCode Challenge Bot! Use /start to get today's challenge.")
+        .parse_mode(ParseMode::Html)
+        .send()
+        .await?;
+    Ok(())
+}
+
+fn duration_until_next_trigger(trigger_time: NaiveTime) -> Duration {
+    let now = Local::now();
+    let target_datetime = now.date().and_time(trigger_time);
+
+    let next_trigger = if now.time() < trigger_time {
+        target_datetime
+    } else {
+        target_datetime + chrono::Duration::days(1)
+    };
+
+    let duration = next_trigger - now;
+    Duration::from_secs(duration.num_seconds() as u64)
+}
+
 
 #[tokio::main]
 async fn main() {
@@ -73,18 +100,49 @@ async fn main() {
         .parse()
         .expect("CHAT_ID should be an integer");
 
+        // Load the trigger time from environment variables
+   let trigger_time_str = env::var("TRIGGER_TIME").expect("TRIGGER_TIME not set");
+   let trigger_time = NaiveTime::parse_from_str(&trigger_time_str, "%H:%M:%S")
+       .expect("TRIGGER_TIME should be in the format HH:MM:SS");
+
     // Initialize the bot and HTTP client
     let bot = Bot::new(bot_token);
     let client = Client::new();
     let chat_id = ChatId(chat_id); // Convert chat_id to ChatId type
 
-    // Set up a daily interval
-    let mut interval = interval(Duration::from_secs(60 * 60 * 24));
+    // Calculate the duration until the next trigger time
+    let duration = duration_until_next_trigger(trigger_time);
+    let start = Instant::now() + duration;
 
-    loop {
-        interval.tick().await;
-        if let Err(err) = send_daily_challenge(bot.clone(), chat_id, client.clone()).await {
-            eprintln!("Error sending daily challenge: {:?}", err);
-        }
-    }
+
+   // Spawn a task to send the daily challenge
+   let bot_clone = bot.clone();
+   let client_clone = client.clone();
+   tokio::spawn(async move {
+       let mut interval = interval_at(start, Duration::from_secs(60 * 60 * 24));
+       loop {
+           interval.tick().await;
+           if let Err(err) = send_daily_challenge(bot_clone.clone(), chat_id, client_clone.clone()).await {
+               eprintln!("Error sending daily challenge: {:?}", err);
+           }
+       }
+   });
+
+   // Set up the command handler for /start
+   teloxide::repl(bot, move |message| {
+       let chat_id = message.chat.id;
+       let command = message.update.text().unwrap_or_default();
+
+       if command == "/start" {
+           let bot_clone = message.requester.clone();
+           tokio::spawn(async move {
+               if let Err(err) = handle_start_command(bot_clone, chat_id).await {
+                   eprintln!("Error handling /start command: {:?}", err);
+               }
+           });
+       }
+
+       async { teloxide::ResponseResult::Ok }
+   })
+   .await;
 }
